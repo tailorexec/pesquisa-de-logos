@@ -28,7 +28,7 @@
   table{width:100%;border-collapse:collapse;margin-top:6px}
   th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:14px}
   th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-  .thumb{width:48px;height:48px;border-radius:8px;background:#fff;object-fit:contain;padding:4px;border:1px solid var(--border)}
+  .thumb{width:52px;height:52px;border-radius:8px;background:#fff;object-fit:contain;padding:4px;border:1px solid var(--border)}
   .dominput{width:100%;background:var(--bg);color:var(--txt);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-size:13px}
   .pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
   .pill.ok{background:rgba(62,207,142,.15);color:var(--ok)}
@@ -47,7 +47,7 @@
 <body>
 <div class="wrap">
   <h1>🔎 Pesquisa de Logos em Lote</h1>
-  <p class="sub">Cole uma lista de empresas (uma por linha), busque as logos e baixe todas em PNG dentro de um ZIP.</p>
+  <p class="sub">Cole uma lista de empresas (uma por linha), busque as logos e baixe todas em alta qualidade dentro de um ZIP.</p>
 
   <div class="card">
     <label for="input">Empresas — uma por linha (nome ou domínio, ex.: <code>Nubank</code> ou <code>nubank.com.br</code>)</label>
@@ -55,37 +55,26 @@
     <div class="row">
       <button id="search">Buscar logos</button>
       <label style="margin:0;display:flex;align-items:center;gap:8px">
-        <span>Tamanho:</span>
-        <select id="size">
-          <option value="256" selected>256 px</option>
-          <option value="128">128 px</option>
+        <span>Mín. aceito:</span>
+        <select id="minsize">
           <option value="64">64 px</option>
+          <option value="96">96 px</option>
+          <option value="128" selected>128 px</option>
+          <option value="200">200 px</option>
         </select>
       </label>
-      <span class="hint">A pré-visualização usa o Google; o download tenta a melhor fonte disponível.</span>
+      <span class="hint">Busca a maior logo disponível e descarta favicons/imagens menores que o mínimo.</span>
     </div>
-  </div>
-
-  <div class="card">
-    <label for="apikey">Chave da API Anthropic (opcional) — usada só pelo botão "Completar com IA"</label>
-    <div class="row" style="margin-top:0">
-      <input id="apikey" type="password" class="dominput" style="flex:1;min-width:220px" placeholder="sk-ant-...">
-      <button id="savekey" class="secondary">Salvar</button>
-    </div>
-    <p class="hint" style="margin:10px 0 0">⚠️ A chave fica salva apenas no seu navegador (localStorage) e é enviada só direto para a API da Anthropic. Use uma chave com limite de gasto. Modelo: <code>Haiku 4.5</code> + busca na web — custa centavos.</p>
   </div>
 
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-top:0">
       <span class="count" id="count">Nenhuma empresa carregada ainda.</span>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button id="aifill" class="secondary" disabled>✨ Completar com IA</button>
-        <button id="download" class="secondary" disabled>⬇️ Baixar todas (ZIP)</button>
-      </div>
+      <button id="download" class="secondary" disabled>⬇️ Baixar todas (ZIP)</button>
     </div>
     <div class="bar" id="bar"><div></div></div>
     <table id="table" style="display:none">
-      <thead><tr><th style="width:60px">Logo</th><th>Empresa</th><th>Domínio (editável)</th><th style="width:110px">Status</th><th style="width:70px">Link</th></tr></thead>
+      <thead><tr><th style="width:64px">Logo</th><th>Empresa</th><th>Domínio (editável)</th><th style="width:120px">Status</th><th style="width:70px">Link</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
     <div class="empty" id="empty">Os resultados aparecerão aqui.</div>
@@ -95,7 +84,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const tbody = $('#tbody');
-let rows = []; // {label, domain, el:{domInput,thumb,status,link}}
+let rows = []; // {label, source, logoUrl, dim, el:{...}}
 
 // ---------- utilidades ----------
 const slug = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
@@ -107,15 +96,43 @@ const cleanDomain = s => s.trim().replace(/^https?:\/\//i,'').replace(/^www\./i,
 const googleUrl = (domain,size) =>
   `https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${domain}&size=${size}`;
 
-// fontes de bytes para download (precisam liberar CORS) — tentadas em ordem
-function byteSources(domain,size){
-  const g = googleUrl(domain,size);
+// Candidatas de logo, da MELHOR para a pior qualidade.
+// unavatar agrega Clearbit/Twitter/Apple-touch-icon/etc. e libera CORS.
+function logoCandidates(domain){
   return [
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(g)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(g)}`,
-    `https://thingproxy.freeboard.io/fetch/${g}`,
-    `https://icon.horse/icon/${domain}`, // CORS liberado, qualidade variável
+    `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`,
+    `https://logo.clearbit.com/${domain}?size=512`,
+    `https://icon.horse/icon/${domain}`,
+    googleUrl(domain, 256),
   ];
+}
+
+// ---------- medir imagem (descartar favicon/pequena) ----------
+function probeImage(url, timeoutMs=9000){
+  return new Promise(resolve=>{
+    const img = new Image();
+    let done = false;
+    const finish = v => { if(done) return; done = true; clearTimeout(t); resolve(v); };
+    const t = setTimeout(()=>{ img.src=''; finish(null); }, timeoutMs);
+    img.referrerPolicy = 'no-referrer';
+    img.onload  = ()=> finish({ url, w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = ()=> finish(null);
+    img.src = url;
+  });
+}
+
+// Escolhe a melhor logo >= mínimo; para cedo se achar uma claramente boa.
+async function pickBestLogo(domain, minAccept){
+  const stopGood = Math.max(minAccept, 128); // se achar essa, já serve
+  let best = null;
+  for(const url of logoCandidates(domain)){
+    const r = await probeImage(url);
+    if(!r) continue;
+    const dim = Math.min(r.w, r.h);
+    if(dim >= stopGood) return { url, dim };
+    if(dim >= minAccept && (!best || dim > best.dim)) best = { url, dim };
+  }
+  return best; // null = nada com tamanho aceitável
 }
 
 // ---------- resolver nome -> domínio (Clearbit autocomplete) ----------
@@ -128,23 +145,29 @@ async function resolveDomain(label){
       if(data && data.length && data[0].domain) return {domain: data[0].domain, source:'clearbit'};
     }
   }catch(e){}
-  // fallback ingênuo: vira "nome.com" (marcado para verificar / completar com IA)
   return {domain: slug(label).replace(/-/g,'') + '.com', source:'fallback'};
+}
+
+// pool de concorrência limitada
+async function runPool(items, worker, concurrency=6){
+  let i = 0;
+  const next = async () => { while(i < items.length){ const idx = i++; await worker(items[idx]); } };
+  await Promise.all(Array.from({length: Math.min(concurrency, items.length)}, next));
 }
 
 // ---------- buscar ----------
 $('#search').addEventListener('click', async () => {
   const labels = $('#input').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  const size = $('#size').value;
+  const minAccept = parseInt($('#minsize').value, 10);
   if(!labels.length){ alert('Cole pelo menos uma empresa.'); return; }
 
   tbody.innerHTML=''; rows=[];
   $('#empty').style.display='none';
   $('#table').style.display='table';
   $('#download').disabled = true;
-  $('#aifill').disabled = true;
   $('#count').textContent = `Resolvendo ${labels.length} empresa(s)...`;
 
+  // 1) cria linhas e resolve domínios
   for(const label of labels){
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -162,48 +185,97 @@ $('#search').addEventListener('click', async () => {
     };
     const res = await resolveDomain(label);
     el.domInput.value = res.domain;
-    const rowObj = { label, source: res.source, get domain(){return cleanDomain(el.domInput.value)}, el };
+    const rowObj = { label, source: res.source, logoUrl:null, dim:0,
+                     get domain(){ return cleanDomain(el.domInput.value); }, el };
     rows.push(rowObj);
-    refreshRow(rowObj, size);
-    el.domInput.addEventListener('change', ()=>{ rowObj.source='manual'; refreshRow(rowObj, $('#size').value); });
+    el.domInput.addEventListener('change', ()=>{ rowObj.source='manual'; refreshRow(rowObj); });
   }
-  const naDuvida = rows.filter(r=>r.source==='fallback').length;
-  $('#count').textContent = naDuvida
-    ? `${rows.length} empresa(s). ${naDuvida} sem confirmação ("verificar") — use "Completar com IA" ou ajuste manualmente.`
-    : `${rows.length} empresa(s). Revise os domínios se necessário e baixe o ZIP.`;
+
+  // 2) busca a melhor logo de cada uma (em paralelo, limitado)
+  $('#count').textContent = `Buscando logos de ${rows.length} empresa(s)...`;
+  await runPool(rows, r => refreshRow(r, minAccept), 6);
+
+  const semLogo = rows.filter(r=>!r.logoUrl).length;
+  const verificar = rows.filter(r=>r.source==='fallback').length;
+  let msg = `${rows.length} empresa(s).`;
+  if(verificar) msg += ` ${verificar} com domínio incerto ("verificar") — ajuste se a logo estiver errada.`;
+  if(semLogo)  msg += ` ${semLogo} sem logo no tamanho mínimo.`;
+  if(!verificar && !semLogo) msg += ` Tudo pronto — baixe o ZIP.`;
+  $('#count').textContent = msg;
   $('#download').disabled = false;
-  $('#aifill').disabled = false;
 });
 
-function refreshRow(row, size){
+async function refreshRow(row, minAccept){
+  if(minAccept == null) minAccept = parseInt($('#minsize').value, 10);
   const d = row.domain;
-  row.el.thumb.src = googleUrl(d, Math.max(64,size));
-  if(row.source === 'fallback'){
-    row.el.status.className = 'pill warn';
-    row.el.status.textContent = 'verificar';
+  row.el.status.className = 'pill idle'; row.el.status.textContent = 'buscando…';
+  const best = await pickBestLogo(d, minAccept);
+  if(best){
+    row.logoUrl = best.url; row.dim = best.dim;
+    row.el.thumb.src = best.url;
+    if(row.source === 'fallback'){
+      row.el.status.className = 'pill warn'; row.el.status.textContent = `verificar · ${best.dim}px`;
+    } else {
+      row.el.status.className = 'pill ok'; row.el.status.textContent = `${best.dim}px`;
+    }
+    row.el.linkCell.innerHTML = `<a class="link" href="${best.url}" target="_blank" rel="noopener">abrir</a>`;
   } else {
-    row.el.status.className = 'pill ok';
-    row.el.status.textContent = row.source === 'ia' ? 'ia ✓' : 'pronto';
+    row.logoUrl = null; row.dim = 0;
+    row.el.thumb.removeAttribute('src');
+    row.el.status.className = 'pill err'; row.el.status.textContent = 'sem logo';
+    row.el.linkCell.innerHTML = `<a class="link" href="${googleUrl(d,256)}" target="_blank" rel="noopener">tentar</a>`;
   }
-  row.el.linkCell.innerHTML = `<a class="link" href="${googleUrl(d,size)}" target="_blank" rel="noopener">abrir</a>`;
 }
 
 // ---------- download em ZIP ----------
-async function fetchLogoBlob(domain, size){
-  for(const url of byteSources(domain, size)){
+// para baixar os bytes: tenta direto (unavatar/icon.horse liberam CORS); senão, proxies
+function byteSources(url){
+  return [
+    url,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    `https://thingproxy.freeboard.io/fetch/${url}`,
+  ];
+}
+
+async function blobMinDim(blob){
+  try{
+    const bmp = await createImageBitmap(blob);
+    const d = Math.min(bmp.width, bmp.height);
+    if(bmp.close) bmp.close();
+    return d;
+  }catch(e){ return null; } // SVG/ICO podem não decodificar — aceita
+}
+
+async function fetchLogoBlob(url, minAccept){
+  for(const src of byteSources(url)){
     try{
-      const r = await fetch(url, {cache:'no-store'});
+      const r = await fetch(src, {cache:'no-store'});
       if(!r.ok) continue;
       const blob = await r.blob();
-      if(blob.size > 70 && /image|octet-stream/.test(blob.type || 'image')) return blob;
-    }catch(e){ /* tenta a próxima fonte */ }
+      if(blob.size < 100) continue;
+      if(!/image|octet-stream/.test(blob.type || 'image')) continue;
+      const d = await blobMinDim(blob);
+      if(d !== null && d < minAccept) continue; // pequena demais
+      return blob;
+    }catch(e){ /* próxima fonte */ }
   }
   return null;
 }
 
+function extFor(type){
+  type = type || '';
+  if(type.includes('png')) return 'png';
+  if(type.includes('jpeg') || type.includes('jpg')) return 'jpg';
+  if(type.includes('webp')) return 'webp';
+  if(type.includes('svg')) return 'svg';
+  if(type.includes('icon')) return 'ico';
+  return 'png';
+}
+
 $('#download').addEventListener('click', async () => {
   if(!rows.length) return;
-  const size = $('#size').value;
+  const minAccept = parseInt($('#minsize').value, 10);
   const btn = $('#download');
   btn.disabled = true;
   const bar = $('#bar'); const fill = bar.firstElementChild;
@@ -212,25 +284,26 @@ $('#download').addEventListener('click', async () => {
   const zip = new JSZip();
   const used = {};
   let done=0, ok=0;
+  const targets = rows.filter(r => r.logoUrl);
 
-  for(const row of rows){
+  for(const row of targets){
     row.el.status.className='pill idle'; row.el.status.textContent='baixando…';
-    const blob = await fetchLogoBlob(row.domain, size);
+    const blob = await fetchLogoBlob(row.logoUrl, minAccept);
     if(blob){
-      let name = slug(row.label);
-      if(used[name]) name = `${name}-${used[name]+1}`; used[slug(row.label)]=(used[slug(row.label)]||0)+1;
-      const ext = blob.type.includes('x-icon') ? 'ico' : (blob.type.includes('svg')?'svg':'png');
-      zip.file(`${name}.${ext}`, blob);
-      row.el.status.className='pill ok'; row.el.status.textContent='ok';
+      const base = slug(row.label);
+      const n = (used[base] = (used[base]||0) + 1);
+      const name = n > 1 ? `${base}-${n}` : base;
+      zip.file(`${name}.${extFor(blob.type)}`, blob);
+      row.el.status.className='pill ok'; row.el.status.textContent = `${row.dim}px`;
       ok++;
     } else {
       row.el.status.className='pill err'; row.el.status.textContent='falhou';
     }
-    done++; fill.style.width = Math.round(done/rows.length*100)+'%';
+    done++; fill.style.width = Math.round(done/targets.length*100)+'%';
   }
 
   if(ok===0){
-    alert('Não foi possível baixar nenhuma logo (provavelmente bloqueio dos proxies CORS no momento). Tente novamente ou use o link "abrir" de cada linha para salvar manualmente.');
+    alert('Não foi possível baixar nenhuma logo agora (proxies CORS podem estar instáveis). Use o link "abrir" de cada linha para salvar manualmente.');
   } else {
     const content = await zip.generateAsync({type:'blob'});
     const a = document.createElement('a');
@@ -239,100 +312,10 @@ $('#download').addEventListener('click', async () => {
     a.click();
     URL.revokeObjectURL(a.href);
   }
-  $('#count').textContent = `Concluído: ${ok}/${rows.length} logo(s) baixada(s).`;
+  $('#count').textContent = `Concluído: ${ok}/${targets.length} logo(s) baixada(s).`;
   setTimeout(()=>{bar.style.display='none';},1200);
   btn.disabled = false;
 });
-
-// ---------- IA: completar domínios (Haiku 4.5 + busca na web) ----------
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const getApiKey = () => ($('#apikey').value || '').trim();
-
-$('#savekey').addEventListener('click', () => {
-  localStorage.setItem('anthropic_key', getApiKey());
-  alert('Chave salva neste navegador.');
-});
-
-async function aiFindDomain(label, apiKey){
-  const body = {
-    model: 'claude-haiku-4-5',
-    max_tokens: 400,
-    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
-    messages: [{
-      role: 'user',
-      content: `Qual é o site oficial (domínio) da empresa brasileira "${label}"? `
-             + `Pesquise na web para confirmar. Responda APENAS com o domínio puro `
-             + `(ex.: empresa.com.br), sem texto extra, sem http e sem www. `
-             + `Se não tiver certeza, responda exatamente: DESCONHECIDO.`
-    }]
-  };
-  const r = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify(body)
-  });
-  if(!r.ok){
-    const t = await r.text().catch(()=> '');
-    throw new Error(`HTTP ${r.status} ${t.slice(0,160)}`);
-  }
-  const data = await r.json();
-  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ');
-  if(/DESCONHECIDO/i.test(text)) return null;
-  const m = text.match(/([a-z0-9-]+\.)+[a-z]{2,}(\.[a-z]{2,})?/i);
-  return m ? cleanDomain(m[0]) : null;
-}
-
-$('#aifill').addEventListener('click', async () => {
-  const apiKey = getApiKey();
-  if(!apiKey){ alert('Cole sua chave da API Anthropic primeiro (e clique em Salvar).'); return; }
-  if(!rows.length) return;
-
-  let targets = rows.filter(r => r.source === 'fallback');
-  if(!targets.length){
-    if(!confirm('O Clearbit já confirmou todas. Verificar TODAS as empresas com IA mesmo assim? (consome mais tokens)')) return;
-    targets = rows.slice();
-  }
-
-  const btn = $('#aifill'); btn.disabled = true;
-  const bar = $('#bar'); const fill = bar.firstElementChild;
-  bar.style.display = 'block'; fill.style.width = '0%';
-  let done = 0, ok = 0;
-
-  for(const row of targets){
-    row.el.status.className = 'pill idle'; row.el.status.textContent = 'IA…';
-    try{
-      const dom = await aiFindDomain(row.label, apiKey);
-      if(dom){
-        row.el.domInput.value = dom;
-        row.source = 'ia';
-        refreshRow(row, $('#size').value);
-        ok++;
-      } else {
-        row.el.status.className = 'pill warn'; row.el.status.textContent = 'não achou';
-      }
-    }catch(e){
-      console.error(e);
-      row.el.status.className = 'pill err'; row.el.status.textContent = 'erro IA';
-      if(/HTTP 401|HTTP 403/.test(e.message)){
-        alert('Chave inválida ou sem permissão (HTTP 401/403). Verifique a chave e tente de novo.');
-        break;
-      }
-    }
-    done++; fill.style.width = Math.round(done / targets.length * 100) + '%';
-  }
-
-  $('#count').textContent = `IA: ${ok}/${targets.length} domínio(s) confirmado(s).`;
-  setTimeout(()=>{ bar.style.display='none'; }, 1200);
-  btn.disabled = false;
-});
-
-// carregar chave salva ao abrir
-$('#apikey').value = localStorage.getItem('anthropic_key') || '';
 </script>
 </body>
 </html>
