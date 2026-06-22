@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pesquisa de Logos em Lote</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --border:#2a2f3a;
+    --txt:#e6e8ee; --muted:#9aa3b2; --accent:#6c8cff; --ok:#3ecf8e; --err:#ff6b6b; --warn:#ffcc66;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 18px 80px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:18px}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}
+  textarea{width:100%;min-height:140px;resize:vertical;background:var(--bg);color:var(--txt);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:14px;font-family:inherit}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  button{cursor:pointer;border:none;border-radius:10px;padding:11px 18px;font-size:14px;font-weight:600;color:#fff;background:var(--accent);transition:.15s}
+  button:hover{filter:brightness(1.1)}
+  button.secondary{background:var(--panel2);border:1px solid var(--border)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  select{background:var(--bg);color:var(--txt);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px}
+  .hint{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:14px}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .thumb{width:48px;height:48px;border-radius:8px;background:#fff;object-fit:contain;padding:4px;border:1px solid var(--border)}
+  .dominput{width:100%;background:var(--bg);color:var(--txt);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-size:13px}
+  .pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+  .pill.ok{background:rgba(62,207,142,.15);color:var(--ok)}
+  .pill.err{background:rgba(255,107,107,.15);color:var(--err)}
+  .pill.warn{background:rgba(255,204,102,.15);color:var(--warn)}
+  .pill.idle{background:var(--panel2);color:var(--muted)}
+  a.link{color:var(--accent);text-decoration:none;font-size:13px}
+  a.link:hover{text-decoration:underline}
+  .bar{height:8px;background:var(--panel2);border-radius:999px;overflow:hidden;margin-top:10px;display:none}
+  .bar > div{height:100%;width:0;background:var(--accent);transition:width .2s}
+  .empty{color:var(--muted);text-align:center;padding:30px}
+  .count{font-size:13px;color:var(--muted)}
+  code{background:var(--panel2);padding:2px 6px;border-radius:5px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔎 Pesquisa de Logos em Lote</h1>
+  <p class="sub">Cole uma lista de empresas (uma por linha), busque as logos e baixe todas em PNG dentro de um ZIP.</p>
+
+  <div class="card">
+    <label for="input">Empresas — uma por linha (nome ou domínio, ex.: <code>Nubank</code> ou <code>nubank.com.br</code>)</label>
+    <textarea id="input" placeholder="Nubank&#10;Magazine Luiza&#10;Itaú&#10;spotify.com&#10;Apple"></textarea>
+    <div class="row">
+      <button id="search">Buscar logos</button>
+      <label style="margin:0;display:flex;align-items:center;gap:8px">
+        <span>Tamanho:</span>
+        <select id="size">
+          <option value="256" selected>256 px</option>
+          <option value="128">128 px</option>
+          <option value="64">64 px</option>
+        </select>
+      </label>
+      <span class="hint">A pré-visualização usa o Google; o download tenta a melhor fonte disponível.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="apikey">Chave da API Anthropic (opcional) — usada só pelo botão "Completar com IA"</label>
+    <div class="row" style="margin-top:0">
+      <input id="apikey" type="password" class="dominput" style="flex:1;min-width:220px" placeholder="sk-ant-...">
+      <button id="savekey" class="secondary">Salvar</button>
+    </div>
+    <p class="hint" style="margin:10px 0 0">⚠️ A chave fica salva apenas no seu navegador (localStorage) e é enviada só direto para a API da Anthropic. Use uma chave com limite de gasto. Modelo: <code>Haiku 4.5</code> + busca na web — custa centavos.</p>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-top:0">
+      <span class="count" id="count">Nenhuma empresa carregada ainda.</span>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button id="aifill" class="secondary" disabled>✨ Completar com IA</button>
+        <button id="download" class="secondary" disabled>⬇️ Baixar todas (ZIP)</button>
+      </div>
+    </div>
+    <div class="bar" id="bar"><div></div></div>
+    <table id="table" style="display:none">
+      <thead><tr><th style="width:60px">Logo</th><th>Empresa</th><th>Domínio (editável)</th><th style="width:110px">Status</th><th style="width:70px">Link</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="empty">Os resultados aparecerão aqui.</div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const tbody = $('#tbody');
+let rows = []; // {label, domain, el:{domInput,thumb,status,link}}
+
+// ---------- utilidades ----------
+const slug = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
+  .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60) || 'logo';
+
+const looksLikeDomain = s => /^[^\s]+\.[a-z]{2,}([\/?#].*)?$/i.test(s.trim());
+const cleanDomain = s => s.trim().replace(/^https?:\/\//i,'').replace(/^www\./i,'').split(/[\/?#]/)[0];
+
+const googleUrl = (domain,size) =>
+  `https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${domain}&size=${size}`;
+
+// fontes de bytes para download (precisam liberar CORS) — tentadas em ordem
+function byteSources(domain,size){
+  const g = googleUrl(domain,size);
+  return [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(g)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(g)}`,
+    `https://thingproxy.freeboard.io/fetch/${g}`,
+    `https://icon.horse/icon/${domain}`, // CORS liberado, qualidade variável
+  ];
+}
+
+// ---------- resolver nome -> domínio (Clearbit autocomplete) ----------
+async function resolveDomain(label){
+  if(looksLikeDomain(label)) return {domain: cleanDomain(label), source:'domain'};
+  try{
+    const r = await fetch(`https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(label)}`);
+    if(r.ok){
+      const data = await r.json();
+      if(data && data.length && data[0].domain) return {domain: data[0].domain, source:'clearbit'};
+    }
+  }catch(e){}
+  // fallback ingênuo: vira "nome.com" (marcado para verificar / completar com IA)
+  return {domain: slug(label).replace(/-/g,'') + '.com', source:'fallback'};
+}
+
+// ---------- buscar ----------
+$('#search').addEventListener('click', async () => {
+  const labels = $('#input').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const size = $('#size').value;
+  if(!labels.length){ alert('Cole pelo menos uma empresa.'); return; }
+
+  tbody.innerHTML=''; rows=[];
+  $('#empty').style.display='none';
+  $('#table').style.display='table';
+  $('#download').disabled = true;
+  $('#aifill').disabled = true;
+  $('#count').textContent = `Resolvendo ${labels.length} empresa(s)...`;
+
+  for(const label of labels){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><img class="thumb" alt=""></td>
+      <td>${label.replace(/</g,'&lt;')}</td>
+      <td><input class="dominput" value="resolvendo..."></td>
+      <td><span class="pill idle">…</span></td>
+      <td></td>`;
+    tbody.appendChild(tr);
+    const el = {
+      thumb: tr.querySelector('.thumb'),
+      domInput: tr.querySelector('.dominput'),
+      status: tr.querySelector('.pill'),
+      linkCell: tr.children[4],
+    };
+    const res = await resolveDomain(label);
+    el.domInput.value = res.domain;
+    const rowObj = { label, source: res.source, get domain(){return cleanDomain(el.domInput.value)}, el };
+    rows.push(rowObj);
+    refreshRow(rowObj, size);
+    el.domInput.addEventListener('change', ()=>{ rowObj.source='manual'; refreshRow(rowObj, $('#size').value); });
+  }
+  const naDuvida = rows.filter(r=>r.source==='fallback').length;
+  $('#count').textContent = naDuvida
+    ? `${rows.length} empresa(s). ${naDuvida} sem confirmação ("verificar") — use "Completar com IA" ou ajuste manualmente.`
+    : `${rows.length} empresa(s). Revise os domínios se necessário e baixe o ZIP.`;
+  $('#download').disabled = false;
+  $('#aifill').disabled = false;
+});
+
+function refreshRow(row, size){
+  const d = row.domain;
+  row.el.thumb.src = googleUrl(d, Math.max(64,size));
+  if(row.source === 'fallback'){
+    row.el.status.className = 'pill warn';
+    row.el.status.textContent = 'verificar';
+  } else {
+    row.el.status.className = 'pill ok';
+    row.el.status.textContent = row.source === 'ia' ? 'ia ✓' : 'pronto';
+  }
+  row.el.linkCell.innerHTML = `<a class="link" href="${googleUrl(d,size)}" target="_blank" rel="noopener">abrir</a>`;
+}
+
+// ---------- download em ZIP ----------
+async function fetchLogoBlob(domain, size){
+  for(const url of byteSources(domain, size)){
+    try{
+      const r = await fetch(url, {cache:'no-store'});
+      if(!r.ok) continue;
+      const blob = await r.blob();
+      if(blob.size > 70 && /image|octet-stream/.test(blob.type || 'image')) return blob;
+    }catch(e){ /* tenta a próxima fonte */ }
+  }
+  return null;
+}
+
+$('#download').addEventListener('click', async () => {
+  if(!rows.length) return;
+  const size = $('#size').value;
+  const btn = $('#download');
+  btn.disabled = true;
+  const bar = $('#bar'); const fill = bar.firstElementChild;
+  bar.style.display='block'; fill.style.width='0%';
+
+  const zip = new JSZip();
+  const used = {};
+  let done=0, ok=0;
+
+  for(const row of rows){
+    row.el.status.className='pill idle'; row.el.status.textContent='baixando…';
+    const blob = await fetchLogoBlob(row.domain, size);
+    if(blob){
+      let name = slug(row.label);
+      if(used[name]) name = `${name}-${used[name]+1}`; used[slug(row.label)]=(used[slug(row.label)]||0)+1;
+      const ext = blob.type.includes('x-icon') ? 'ico' : (blob.type.includes('svg')?'svg':'png');
+      zip.file(`${name}.${ext}`, blob);
+      row.el.status.className='pill ok'; row.el.status.textContent='ok';
+      ok++;
+    } else {
+      row.el.status.className='pill err'; row.el.status.textContent='falhou';
+    }
+    done++; fill.style.width = Math.round(done/rows.length*100)+'%';
+  }
+
+  if(ok===0){
+    alert('Não foi possível baixar nenhuma logo (provavelmente bloqueio dos proxies CORS no momento). Tente novamente ou use o link "abrir" de cada linha para salvar manualmente.');
+  } else {
+    const content = await zip.generateAsync({type:'blob'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(content);
+    a.download = 'logos.zip';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  $('#count').textContent = `Concluído: ${ok}/${rows.length} logo(s) baixada(s).`;
+  setTimeout(()=>{bar.style.display='none';},1200);
+  btn.disabled = false;
+});
+
+// ---------- IA: completar domínios (Haiku 4.5 + busca na web) ----------
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const getApiKey = () => ($('#apikey').value || '').trim();
+
+$('#savekey').addEventListener('click', () => {
+  localStorage.setItem('anthropic_key', getApiKey());
+  alert('Chave salva neste navegador.');
+});
+
+async function aiFindDomain(label, apiKey){
+  const body = {
+    model: 'claude-haiku-4-5',
+    max_tokens: 400,
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
+    messages: [{
+      role: 'user',
+      content: `Qual é o site oficial (domínio) da empresa brasileira "${label}"? `
+             + `Pesquise na web para confirmar. Responda APENAS com o domínio puro `
+             + `(ex.: empresa.com.br), sem texto extra, sem http e sem www. `
+             + `Se não tiver certeza, responda exatamente: DESCONHECIDO.`
+    }]
+  };
+  const r = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify(body)
+  });
+  if(!r.ok){
+    const t = await r.text().catch(()=> '');
+    throw new Error(`HTTP ${r.status} ${t.slice(0,160)}`);
+  }
+  const data = await r.json();
+  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ');
+  if(/DESCONHECIDO/i.test(text)) return null;
+  const m = text.match(/([a-z0-9-]+\.)+[a-z]{2,}(\.[a-z]{2,})?/i);
+  return m ? cleanDomain(m[0]) : null;
+}
+
+$('#aifill').addEventListener('click', async () => {
+  const apiKey = getApiKey();
+  if(!apiKey){ alert('Cole sua chave da API Anthropic primeiro (e clique em Salvar).'); return; }
+  if(!rows.length) return;
+
+  let targets = rows.filter(r => r.source === 'fallback');
+  if(!targets.length){
+    if(!confirm('O Clearbit já confirmou todas. Verificar TODAS as empresas com IA mesmo assim? (consome mais tokens)')) return;
+    targets = rows.slice();
+  }
+
+  const btn = $('#aifill'); btn.disabled = true;
+  const bar = $('#bar'); const fill = bar.firstElementChild;
+  bar.style.display = 'block'; fill.style.width = '0%';
+  let done = 0, ok = 0;
+
+  for(const row of targets){
+    row.el.status.className = 'pill idle'; row.el.status.textContent = 'IA…';
+    try{
+      const dom = await aiFindDomain(row.label, apiKey);
+      if(dom){
+        row.el.domInput.value = dom;
+        row.source = 'ia';
+        refreshRow(row, $('#size').value);
+        ok++;
+      } else {
+        row.el.status.className = 'pill warn'; row.el.status.textContent = 'não achou';
+      }
+    }catch(e){
+      console.error(e);
+      row.el.status.className = 'pill err'; row.el.status.textContent = 'erro IA';
+      if(/HTTP 401|HTTP 403/.test(e.message)){
+        alert('Chave inválida ou sem permissão (HTTP 401/403). Verifique a chave e tente de novo.');
+        break;
+      }
+    }
+    done++; fill.style.width = Math.round(done / targets.length * 100) + '%';
+  }
+
+  $('#count').textContent = `IA: ${ok}/${targets.length} domínio(s) confirmado(s).`;
+  setTimeout(()=>{ bar.style.display='none'; }, 1200);
+  btn.disabled = false;
+});
+
+// carregar chave salva ao abrir
+$('#apikey').value = localStorage.getItem('anthropic_key') || '';
+</script>
+</body>
+</html>
