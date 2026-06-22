@@ -47,7 +47,7 @@
 <body>
 <div class="wrap">
   <h1>🔎 Pesquisa de Logos em Lote</h1>
-  <p class="sub">Cole uma lista de empresas (uma por linha), busque as logos e baixe todas em alta qualidade dentro de um ZIP.</p>
+  <p class="sub">Cole uma lista de empresas (uma por linha), busque as logos e baixe todas dentro de um ZIP.</p>
 
   <div class="card">
     <label for="input">Empresas — uma por linha (nome ou domínio, ex.: <code>Nubank</code> ou <code>nubank.com.br</code>)</label>
@@ -57,13 +57,13 @@
       <label style="margin:0;display:flex;align-items:center;gap:8px">
         <span>Mín. aceito:</span>
         <select id="minsize">
-          <option value="64">64 px</option>
+          <option value="48">48 px</option>
+          <option value="64" selected>64 px</option>
           <option value="96">96 px</option>
-          <option value="128" selected>128 px</option>
-          <option value="200">200 px</option>
+          <option value="128">128 px</option>
         </select>
       </label>
-      <span class="hint">Busca a maior logo disponível e descarta favicons/imagens menores que o mínimo.</span>
+      <span class="hint">Tenta o nome como domínio (.com.br etc.), prioriza Brasil e descarta favicons pequenos.</span>
     </div>
   </div>
 
@@ -74,7 +74,7 @@
     </div>
     <div class="bar" id="bar"><div></div></div>
     <table id="table" style="display:none">
-      <thead><tr><th style="width:64px">Logo</th><th>Empresa</th><th>Domínio (editável)</th><th style="width:120px">Status</th><th style="width:70px">Link</th></tr></thead>
+      <thead><tr><th style="width:64px">Logo</th><th>Empresa</th><th>Domínio (editável)</th><th style="width:130px">Status</th><th style="width:70px">Link</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
     <div class="empty" id="empty">Os resultados aparecerão aqui.</div>
@@ -84,30 +84,32 @@
 <script>
 const $ = s => document.querySelector(s);
 const tbody = $('#tbody');
-let rows = []; // {label, source, logoUrl, dim, el:{...}}
+let rows = [];
 
 // ---------- utilidades ----------
-const slug = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
-  .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60) || 'logo';
+const slugHyphen = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
+  .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60);
+const nameSlug = s => slugHyphen(s).replace(/-/g,'') || 'logo';
 
 const looksLikeDomain = s => /^[^\s]+\.[a-z]{2,}([\/?#].*)?$/i.test(s.trim());
 const cleanDomain = s => s.trim().replace(/^https?:\/\//i,'').replace(/^www\./i,'').split(/[\/?#]/)[0];
+const isBr = d => /\.br$/i.test(d);
+const dn = d => d.split('.')[0].replace(/-/g,'');
 
 const googleUrl = (domain,size) =>
   `https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${domain}&size=${size}`;
 
-// Candidatas de logo, da MELHOR para a pior qualidade.
-// unavatar agrega Clearbit/Twitter/Apple-touch-icon/etc. e libera CORS.
-function logoCandidates(domain){
+// fontes de imagem para um domínio, da melhor para a pior qualidade
+function logoSources(domain){
   return [
-    `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`,
-    `https://logo.clearbit.com/${domain}?size=512`,
-    `https://icon.horse/icon/${domain}`,
-    googleUrl(domain, 256),
+    `https://logo.clearbit.com/${domain}?size=512`,          // logo oficial, alta
+    `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`, // agregador
+    `https://icon.horse/icon/${domain}`,                      // melhor ícone do site
+    googleUrl(domain, 256),                                   // último recurso
   ];
 }
 
-// ---------- medir imagem (descartar favicon/pequena) ----------
+// ---------- medir imagem (descarta favicon/pequena) ----------
 function probeImage(url, timeoutMs=9000){
   return new Promise(resolve=>{
     const img = new Image();
@@ -115,44 +117,108 @@ function probeImage(url, timeoutMs=9000){
     const finish = v => { if(done) return; done = true; clearTimeout(t); resolve(v); };
     const t = setTimeout(()=>{ img.src=''; finish(null); }, timeoutMs);
     img.referrerPolicy = 'no-referrer';
-    img.onload  = ()=> finish({ url, w: img.naturalWidth, h: img.naturalHeight });
+    img.onload  = ()=> finish({ url, dim: Math.min(img.naturalWidth, img.naturalHeight) });
     img.onerror = ()=> finish(null);
     img.src = url;
   });
 }
 
-// Escolhe a melhor logo >= mínimo; para cedo se achar uma claramente boa.
-async function pickBestLogo(domain, minAccept){
-  const stopGood = Math.max(minAccept, 128); // se achar essa, já serve
+// melhor logo de UM domínio (entre as fontes)
+async function bestLogoForDomain(domain, minAccept){
+  const stopGood = Math.max(minAccept, 128);
   let best = null;
-  for(const url of logoCandidates(domain)){
+  for(const url of logoSources(domain)){
     const r = await probeImage(url);
     if(!r) continue;
-    const dim = Math.min(r.w, r.h);
-    if(dim >= stopGood) return { url, dim };
-    if(dim >= minAccept && (!best || dim > best.dim)) best = { url, dim };
+    if(r.dim >= stopGood) return { url, dim: r.dim };
+    if(r.dim >= minAccept && (!best || r.dim > best.dim)) best = { url, dim: r.dim };
   }
-  return best; // null = nada com tamanho aceitável
+  return best;
 }
 
-// ---------- resolver nome -> domínio (Clearbit autocomplete) ----------
-async function resolveDomain(label){
-  if(looksLikeDomain(label)) return {domain: cleanDomain(label), source:'domain'};
+// ---------- candidatos de domínio a partir do nome ----------
+function nameCandidates(label){
+  const base = nameSlug(label);
+  const hyph = slugHyphen(label);
+  const multi = label.trim().split(/\s+/).length > 1;
+  const list = [
+    base + '.com.br',
+    base + '.com',
+  ];
+  if(multi && hyph !== base) list.push(hyph + '.com.br');
+  list.push(base + '.eng.br');
+  list.push(base + 'engenharia.com.br');
+  return [...new Set(list)].map(domain => ({ domain, trust: true }));
+}
+
+// ---------- Clearbit autocomplete (com preferência .br) ----------
+async function clearbitCandidates(label){
   try{
     const r = await fetch(`https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(label)}`);
-    if(r.ok){
-      const data = await r.json();
-      if(data && data.length && data[0].domain) return {domain: data[0].domain, source:'clearbit'};
-    }
-  }catch(e){}
-  return {domain: slug(label).replace(/-/g,'') + '.com', source:'fallback'};
+    if(!r.ok) return [];
+    const data = await r.json();
+    if(!Array.isArray(data)) return [];
+    const base = nameSlug(label);
+    const scored = data.map(x => {
+      const d = x.domain;
+      const match = dn(d).includes(base) || base.includes(dn(d));
+      const br = isBr(d);
+      return { domain: d, trust: match && br, score: (br?2:0) + (match?1:0) };
+    });
+    scored.sort((a,b)=> b.score - a.score);
+    return scored.slice(0,4);
+  }catch(e){ return []; }
 }
 
-// pool de concorrência limitada
-async function runPool(items, worker, concurrency=6){
+// ---------- resolver: acha o domínio cuja logo é a melhor ----------
+async function resolveBest(label, minAccept){
+  if(looksLikeDomain(label)){
+    const d = cleanDomain(label);
+    const r = await bestLogoForDomain(d, minAccept);
+    return { domain: d, url: r&&r.url, dim: r?r.dim:0, confidence: 'ok' };
+  }
+  // ordem: candidatos do nome (confiáveis) -> Clearbit
+  const cands = [...nameCandidates(label), ...(await clearbitCandidates(label))];
+  const seen = new Set();
+  let best = null;
+  for(const c of cands){
+    if(seen.has(c.domain)) continue; seen.add(c.domain);
+    const r = await bestLogoForDomain(c.domain, minAccept);
+    if(r){
+      const cand = { domain: c.domain, url: r.url, dim: r.dim, trust: c.trust };
+      // candidato confiável com logo decente: encerra cedo
+      if(c.trust && r.dim >= Math.max(minAccept, 96)){
+        return { ...cand, confidence: 'ok' };
+      }
+      if(!best || r.dim > best.dim) best = cand;
+    }
+  }
+  if(best) return { domain: best.domain, url: best.url, dim: best.dim, confidence: best.trust ? 'ok' : 'verificar' };
+  // nada com logo: devolve o palpite mais provável p/ o usuário ajustar
+  return { domain: nameSlug(label) + '.com.br', url: null, dim: 0, confidence: 'verificar' };
+}
+
+// pool de concorrência limitada (gentil com rate-limits)
+async function runPool(items, worker, concurrency=4){
   let i = 0;
   const next = async () => { while(i < items.length){ const idx = i++; await worker(items[idx]); } };
   await Promise.all(Array.from({length: Math.min(concurrency, items.length)}, next));
+}
+
+function renderRow(row){
+  if(row.url){
+    row.el.thumb.src = row.url;
+    if(row.confidence === 'verificar'){
+      row.el.status.className = 'pill warn'; row.el.status.textContent = `verificar · ${row.dim}px`;
+    } else {
+      row.el.status.className = 'pill ok'; row.el.status.textContent = `${row.dim}px`;
+    }
+    row.el.linkCell.innerHTML = `<a class="link" href="${row.url}" target="_blank" rel="noopener">abrir</a>`;
+  } else {
+    row.el.thumb.removeAttribute('src');
+    row.el.status.className = 'pill err'; row.el.status.textContent = 'sem logo';
+    row.el.linkCell.innerHTML = `<a class="link" href="${googleUrl(row.domainNow(),256)}" target="_blank" rel="noopener">tentar</a>`;
+  }
 }
 
 // ---------- buscar ----------
@@ -165,15 +231,14 @@ $('#search').addEventListener('click', async () => {
   $('#empty').style.display='none';
   $('#table').style.display='table';
   $('#download').disabled = true;
-  $('#count').textContent = `Resolvendo ${labels.length} empresa(s)...`;
+  $('#count').textContent = `Buscando ${labels.length} empresa(s)...`;
 
-  // 1) cria linhas e resolve domínios
   for(const label of labels){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><img class="thumb" alt=""></td>
       <td>${label.replace(/</g,'&lt;')}</td>
-      <td><input class="dominput" value="resolvendo..."></td>
+      <td><input class="dominput" value="..."></td>
       <td><span class="pill idle">…</span></td>
       <td></td>`;
     tbody.appendChild(tr);
@@ -183,52 +248,39 @@ $('#search').addEventListener('click', async () => {
       status: tr.querySelector('.pill'),
       linkCell: tr.children[4],
     };
-    const res = await resolveDomain(label);
-    el.domInput.value = res.domain;
-    const rowObj = { label, source: res.source, logoUrl:null, dim:0,
-                     get domain(){ return cleanDomain(el.domInput.value); }, el };
+    const rowObj = { label, el, url:null, dim:0, confidence:'ok',
+                     domainNow(){ return cleanDomain(el.domInput.value); } };
     rows.push(rowObj);
-    el.domInput.addEventListener('change', ()=>{ rowObj.source='manual'; refreshRow(rowObj); });
+    // edição manual do domínio -> rebusca só aquele domínio
+    el.domInput.addEventListener('change', async ()=>{
+      rowObj.confidence = 'ok';
+      rowObj.el.status.className='pill idle'; rowObj.el.status.textContent='buscando…';
+      const r = await bestLogoForDomain(rowObj.domainNow(), parseInt($('#minsize').value,10));
+      rowObj.url = r&&r.url; rowObj.dim = r?r.dim:0;
+      renderRow(rowObj);
+    });
   }
 
-  // 2) busca a melhor logo de cada uma (em paralelo, limitado)
-  $('#count').textContent = `Buscando logos de ${rows.length} empresa(s)...`;
-  await runPool(rows, r => refreshRow(r, minAccept), 6);
+  let done = 0;
+  await runPool(rows, async (row) => {
+    row.el.status.className='pill idle'; row.el.status.textContent='buscando…';
+    const res = await resolveBest(row.label, minAccept);
+    row.el.domInput.value = res.domain;
+    row.url = res.url; row.dim = res.dim; row.confidence = res.confidence;
+    renderRow(row);
+    done++; $('#count').textContent = `Buscando... ${done}/${rows.length}`;
+  }, 4);
 
-  const semLogo = rows.filter(r=>!r.logoUrl).length;
-  const verificar = rows.filter(r=>r.source==='fallback').length;
-  let msg = `${rows.length} empresa(s).`;
-  if(verificar) msg += ` ${verificar} com domínio incerto ("verificar") — ajuste se a logo estiver errada.`;
-  if(semLogo)  msg += ` ${semLogo} sem logo no tamanho mínimo.`;
-  if(!verificar && !semLogo) msg += ` Tudo pronto — baixe o ZIP.`;
-  $('#count').textContent = msg;
+  const okN = rows.filter(r=>r.url && r.confidence==='ok').length;
+  const verN = rows.filter(r=>r.confidence==='verificar' && r.url).length;
+  const semN = rows.filter(r=>!r.url).length;
+  $('#count').textContent =
+    `${rows.length} empresa(s): ${okN} ok, ${verN} para verificar, ${semN} sem logo. `
+    + `Ajuste os domínios marcados e baixe o ZIP.`;
   $('#download').disabled = false;
 });
 
-async function refreshRow(row, minAccept){
-  if(minAccept == null) minAccept = parseInt($('#minsize').value, 10);
-  const d = row.domain;
-  row.el.status.className = 'pill idle'; row.el.status.textContent = 'buscando…';
-  const best = await pickBestLogo(d, minAccept);
-  if(best){
-    row.logoUrl = best.url; row.dim = best.dim;
-    row.el.thumb.src = best.url;
-    if(row.source === 'fallback'){
-      row.el.status.className = 'pill warn'; row.el.status.textContent = `verificar · ${best.dim}px`;
-    } else {
-      row.el.status.className = 'pill ok'; row.el.status.textContent = `${best.dim}px`;
-    }
-    row.el.linkCell.innerHTML = `<a class="link" href="${best.url}" target="_blank" rel="noopener">abrir</a>`;
-  } else {
-    row.logoUrl = null; row.dim = 0;
-    row.el.thumb.removeAttribute('src');
-    row.el.status.className = 'pill err'; row.el.status.textContent = 'sem logo';
-    row.el.linkCell.innerHTML = `<a class="link" href="${googleUrl(d,256)}" target="_blank" rel="noopener">tentar</a>`;
-  }
-}
-
 // ---------- download em ZIP ----------
-// para baixar os bytes: tenta direto (unavatar/icon.horse liberam CORS); senão, proxies
 function byteSources(url){
   return [
     url,
@@ -244,7 +296,7 @@ async function blobMinDim(blob){
     const d = Math.min(bmp.width, bmp.height);
     if(bmp.close) bmp.close();
     return d;
-  }catch(e){ return null; } // SVG/ICO podem não decodificar — aceita
+  }catch(e){ return null; }
 }
 
 async function fetchLogoBlob(url, minAccept){
@@ -256,7 +308,7 @@ async function fetchLogoBlob(url, minAccept){
       if(blob.size < 100) continue;
       if(!/image|octet-stream/.test(blob.type || 'image')) continue;
       const d = await blobMinDim(blob);
-      if(d !== null && d < minAccept) continue; // pequena demais
+      if(d !== null && d < minAccept) continue;
       return blob;
     }catch(e){ /* próxima fonte */ }
   }
@@ -284,13 +336,13 @@ $('#download').addEventListener('click', async () => {
   const zip = new JSZip();
   const used = {};
   let done=0, ok=0;
-  const targets = rows.filter(r => r.logoUrl);
+  const targets = rows.filter(r => r.url);
 
   for(const row of targets){
     row.el.status.className='pill idle'; row.el.status.textContent='baixando…';
-    const blob = await fetchLogoBlob(row.logoUrl, minAccept);
+    const blob = await fetchLogoBlob(row.url, minAccept);
     if(blob){
-      const base = slug(row.label);
+      const base = nameSlug(row.label);
       const n = (used[base] = (used[base]||0) + 1);
       const name = n > 1 ? `${base}-${n}` : base;
       zip.file(`${name}.${extFor(blob.type)}`, blob);
@@ -303,7 +355,7 @@ $('#download').addEventListener('click', async () => {
   }
 
   if(ok===0){
-    alert('Não foi possível baixar nenhuma logo agora (proxies CORS podem estar instáveis). Use o link "abrir" de cada linha para salvar manualmente.');
+    alert('Não foi possível baixar agora (proxies CORS podem estar instáveis). Use o link "abrir" de cada linha para salvar manualmente.');
   } else {
     const content = await zip.generateAsync({type:'blob'});
     const a = document.createElement('a');
