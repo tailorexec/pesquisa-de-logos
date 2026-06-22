@@ -52,6 +52,7 @@
   <div class="card">
     <label for="input">Empresas — uma por linha (nome ou domínio, ex.: <code>Nubank</code> ou <code>nubank.com.br</code>)</label>
     <textarea id="input" placeholder="Nubank&#10;Magazine Luiza&#10;Itaú&#10;spotify.com&#10;Apple"></textarea>
+    <input id="ctx" class="dominput" style="margin-top:12px;width:100%" placeholder="Contexto p/ a busca (opcional) — ex.: construtoras e engenharia do Brasil">
     <div class="row">
       <button id="search">Buscar logos</button>
       <label style="margin:0;display:flex;align-items:center;gap:8px">
@@ -105,11 +106,13 @@ const googleUrl = (domain,size) =>
 
 // fontes de imagem para um domínio, da melhor para a pior qualidade
 function logoSources(domain){
-  return [
+  const arr = [
     `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`, // agregador (melhor qualidade)
     `https://icon.horse/icon/${domain}`,                      // ícone do site (confiável)
-    googleUrl(domain, 256),                                   // último recurso (favicon)
+    googleUrl(domain, 256),                                   // favicon
   ];
+  if(BACKEND) arr.push(`${BACKEND}/logo?domain=${encodeURIComponent(domain)}`); // logo grande do próprio site
+  return arr;
 }
 
 // ---------- medir imagem (descarta favicon/pequena) ----------
@@ -202,10 +205,11 @@ async function resolveBest(label, minAccept){
 }
 
 // backend opcional: busca o domínio oficial via IA + web search
-async function backendResolve(name){
+async function backendResolve(name, ctx){
   if(!BACKEND) return null;
   try{
-    const r = await fetch(`${BACKEND}/resolve?name=${encodeURIComponent(name)}`);
+    const q = `${BACKEND}/resolve?name=${encodeURIComponent(name)}` + (ctx ? `&ctx=${encodeURIComponent(ctx)}` : '');
+    const r = await fetch(q);
     if(!r.ok) return null;
     return await r.json(); // {domain, confianca}
   }catch(e){ return null; }
@@ -238,6 +242,7 @@ function renderRow(row){
 $('#search').addEventListener('click', async () => {
   const labels = $('#input').value.split('\n').map(s=>s.trim()).filter(Boolean);
   const minAccept = parseInt($('#minsize').value, 10);
+  const ctx = $('#ctx').value.trim();
   if(!labels.length){ alert('Cole pelo menos uma empresa.'); return; }
 
   tbody.innerHTML=''; rows=[];
@@ -281,7 +286,7 @@ $('#search').addEventListener('click', async () => {
     // refina com o backend (IA + busca) só quando o método grátis ficou incerto
     if(BACKEND && !looksLikeDomain(row.label) && (res.confidence === 'verificar' || !res.url)){
       row.el.status.textContent = 'busca IA…';
-      const b = await backendResolve(row.label);
+      const b = await backendResolve(row.label, ctx);
       if(b && b.domain){
         const r2 = await bestLogoForDomain(b.domain, minAccept);
         if(r2 || b.confianca === 'alta'){
