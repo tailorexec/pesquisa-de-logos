@@ -88,7 +88,7 @@ let rows = [];
 
 // URL do backend (Cloudflare Worker). Vazio = modo 100% grátis (sem busca por IA).
 // Preencha com algo como "https://pesquisa-logos-backend.SEU-SUBDOMINIO.workers.dev"
-const BACKEND = "";
+const BACKEND = "https://pesquisa-logo-backend.flavio-junior.workers.dev";
 
 // ---------- utilidades ----------
 const slugHyphen = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
@@ -106,10 +106,9 @@ const googleUrl = (domain,size) =>
 // fontes de imagem para um domínio, da melhor para a pior qualidade
 function logoSources(domain){
   return [
-    `https://logo.clearbit.com/${domain}?size=512`,          // logo oficial, alta
-    `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`, // agregador
-    `https://icon.horse/icon/${domain}`,                      // melhor ícone do site
-    googleUrl(domain, 256),                                   // último recurso
+    `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`, // agregador (melhor qualidade)
+    `https://icon.horse/icon/${domain}`,                      // ícone do site (confiável)
+    googleUrl(domain, 256),                                   // último recurso (favicon)
   ];
 }
 
