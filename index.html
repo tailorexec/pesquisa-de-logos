@@ -86,6 +86,10 @@ const $ = s => document.querySelector(s);
 const tbody = $('#tbody');
 let rows = [];
 
+// URL do backend (Cloudflare Worker). Vazio = modo 100% grátis (sem busca por IA).
+// Preencha com algo como "https://pesquisa-logos-backend.SEU-SUBDOMINIO.workers.dev"
+const BACKEND = "";
+
 // ---------- utilidades ----------
 const slugHyphen = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
   .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60);
@@ -198,6 +202,16 @@ async function resolveBest(label, minAccept){
   return { domain: nameSlug(label) + '.com.br', url: null, dim: 0, confidence: 'verificar' };
 }
 
+// backend opcional: busca o domínio oficial via IA + web search
+async function backendResolve(name){
+  if(!BACKEND) return null;
+  try{
+    const r = await fetch(`${BACKEND}/resolve?name=${encodeURIComponent(name)}`);
+    if(!r.ok) return null;
+    return await r.json(); // {domain, confianca}
+  }catch(e){ return null; }
+}
+
 // pool de concorrência limitada (gentil com rate-limits)
 async function runPool(items, worker, concurrency=4){
   let i = 0;
@@ -264,7 +278,19 @@ $('#search').addEventListener('click', async () => {
   let done = 0;
   await runPool(rows, async (row) => {
     row.el.status.className='pill idle'; row.el.status.textContent='buscando…';
-    const res = await resolveBest(row.label, minAccept);
+    let res = await resolveBest(row.label, minAccept);
+    // refina com o backend (IA + busca) só quando o método grátis ficou incerto
+    if(BACKEND && !looksLikeDomain(row.label) && (res.confidence === 'verificar' || !res.url)){
+      row.el.status.textContent = 'busca IA…';
+      const b = await backendResolve(row.label);
+      if(b && b.domain){
+        const r2 = await bestLogoForDomain(b.domain, minAccept);
+        if(r2 || b.confianca === 'alta'){
+          res = { domain: b.domain, url: r2 && r2.url, dim: r2 ? r2.dim : 0,
+                  confidence: b.confianca === 'alta' ? 'ok' : 'verificar' };
+        }
+      }
+    }
     row.el.domInput.value = res.domain;
     row.url = res.url; row.dim = res.dim; row.confidence = res.confidence;
     renderRow(row);
@@ -282,12 +308,12 @@ $('#search').addEventListener('click', async () => {
 
 // ---------- download em ZIP ----------
 function byteSources(url){
-  return [
-    url,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-    `https://thingproxy.freeboard.io/fetch/${url}`,
-  ];
+  const arr = [url];
+  if(BACKEND) arr.push(`${BACKEND}/img?url=${encodeURIComponent(url)}`); // proxy confiável
+  arr.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+  arr.push(`https://corsproxy.io/?url=${encodeURIComponent(url)}`);
+  arr.push(`https://thingproxy.freeboard.io/fetch/${url}`);
+  return arr;
 }
 
 async function blobMinDim(blob){

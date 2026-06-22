@@ -1,0 +1,8 @@
+# Cloudflare Worker — deploy via CLI (opcional; também dá pra colar no dashboard)
+#   npm i -g wrangler
+#   wrangler login
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler deploy
+name = "pesquisa-logos-backend"
+main = "worker.js"
+compatibility_date = "2024-11-01"
